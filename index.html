@@ -4638,7 +4638,7 @@ var WP_IMG = {
     { id: 'tokyorain',  icon: '🛏️', name: '凌晨两点', sub: '2:00 AM · 静态壁纸' },
     { id: 'cyberpunk-city', icon: '🗼', name: '东京暮色', sub: 'Tokyo Twilight · 静态壁纸' },
     { id: 'snow-maple', icon: '🍁', name: '雪枫黄昏', sub: 'Snow Maple · 静态壁纸' },
-    { id: 'star-gate', icon: '🌌', name: '星空之门', sub: 'Star Gate · 静态壁纸' },
+    { id: 'star-gate', icon: '🏰', name: '星夜之城', sub: 'Starry Castle · 静态壁纸' },
     { id: 'desk-ui',    icon: '☕', name: '深夜咖啡', sub: 'Lo-Fi Café · 静态壁纸' }
   ];
   var dockStyle = document.createElement('style');
@@ -4706,7 +4706,7 @@ var WP_IMG = {
     });
   }
   /* ---------- 壁纸图源：jsDelivr 国内节点优先（快 + 永久缓存），失败回退本站 ---------- */
-  var WP_COMMIT = '895c907e734121be1e1c4eefab3939aec78dec9e';
+  var WP_COMMIT = '1e2df8986f9a291feee1f9567ff31495a8b4809f';
   var WP_CDN = 'https://cdn.jsdelivr.net/gh/liskcya/lite@' + WP_COMMIT + '/';
   var _webpOK = (function () {
     try {
@@ -4723,23 +4723,91 @@ var WP_IMG = {
     list.push('wallpapers/' + file + '.jpg');
     return list;
   }
-  /* 按回退链加载单图；返回 {abort} 可真正中断在途下载 */
+  /* ---------- IndexedDB 永久缓存：每张壁纸只下载一次，之后进站零网络直接读本地 ---------- */
+  var _idb = null;
+  function _idbOpen(cb) {
+    if (_idb !== null) { cb(_idb || false); return; }
+    try {
+      var req = indexedDB.open('zcy-wp-cache', 1);
+      req.onupgradeneeded = function () { req.result.createObjectStore('imgs', { keyPath: 'name' }); };
+      req.onsuccess = function () { _idb = req.result; cb(_idb); };
+      req.onerror = function () { _idb = false; cb(false); };
+    } catch (e) { _idb = false; cb(false); }
+  }
+  function _idbGet(db, name, cb) {
+    if (!db) { cb(null); return; }
+    try {
+      var r = db.transaction('imgs', 'readonly').objectStore('imgs').get(name);
+      r.onsuccess = function () { cb(r.result || null); };
+      r.onerror = function () { cb(null); };
+    } catch (e) { cb(null); }
+  }
+  function _idbPut(db, name, blob) {
+    if (!db) return;
+    try { db.transaction('imgs', 'readwrite').objectStore('imgs').put({ name: name, blob: blob }); } catch (e) {}
+  }
+  function _idbClean(db, keep) {
+    if (!db) return;
+    try {
+      var rq = db.transaction('imgs', 'readwrite').objectStore('imgs').openCursor();
+      rq.onsuccess = function () {
+        var c = rq.result;
+        if (!c) return;
+        if (keep.indexOf(String(c.key)) < 0) c.delete();
+        c.continue();
+      };
+    } catch (e) {}
+  }
+  /* 按回退链加载单图（IndexedDB → fetch → Image）；返回 {abort} 可真正中断在途下载 */
   function wpLoadImg(file, onok, onfail) {
     if (_wpCache[file]) { if (onok) onok(_wpCache[file]); return { abort: function () {} }; }
-    var urls = _wpCandidates(file), idx = 0, img = null, dead = false;
-    function next() {
-      if (dead) return;
-      if (idx >= urls.length) { if (onfail) onfail(); return; }
-      var u = urls[idx++];
-      img = new Image();
-      img.onload = function () { if (dead) return; _wpCache[file] = u; if (onok) onok(u); };
-      img.onerror = function () { setTimeout(next, 0); };
-      img.src = u;
+    var dead = false, ac = null, img = null;
+    function finish(u) {
+      if (dead) return; dead = true;
+      _wpCache[file] = u;
+      if (onok) onok(u);
     }
-    next();
+    function viaImage() { /* 最后兜底：传统加载（拿不到 blob 就不写缓存库） */
+      var urls = _wpCandidates(file), idx = 0;
+      (function next() {
+        if (dead) return;
+        if (idx >= urls.length) { if (onfail) onfail(); return; }
+        var u = urls[idx++], im = new Image();
+        im.onload = function () { if (!dead) finish(u); };
+        im.onerror = function () { setTimeout(next, 0); };
+        img = im; im.src = u;
+      })();
+    }
+    _idbOpen(function (db) {
+      if (dead) return;
+      _idbGet(db, file, function (rec) {
+        if (dead) return;
+        if (rec && rec.blob) {
+          try { finish(URL.createObjectURL(rec.blob)); return; } catch (e) {}
+        }
+        var urls = _wpCandidates(file), idx = 0;
+        (function next() {
+          if (dead) return;
+          if (idx >= urls.length) { viaImage(); return; }
+          var u = urls[idx++];
+          try {
+            ac = new AbortController();
+            fetch(u, { signal: ac.signal, mode: 'cors' }).then(function (res) {
+              if (!res.ok) throw 0;
+              return res.blob();
+            }).then(function (b) {
+              if (dead) return;
+              if (db && b) _idbPut(db, file, b);
+              finish(URL.createObjectURL(b));
+            }).catch(function () { ac = null; setTimeout(next, 0); });
+          } catch (e) { setTimeout(next, 0); }
+        })();
+      });
+    });
     return {
       abort: function () {
         dead = true;
+        try { if (ac) ac.abort(); } catch (e) {}
         if (img) { img.onload = null; img.onerror = null; try { img.src = ''; } catch (e) {} img = null; }
       }
     };
@@ -4772,7 +4840,7 @@ var WP_IMG = {
     synthwave: 'synthwave', seaside: 'seaside', cyberpunk: 'cyberpunk', starry: 'starry',
     snowy: 'irithyll', blossom: 'blossom', countryside: 'countryside', sunset: 'sunset',
     tokyorain: 'tokyorain', 'cyberpunk-city': 'cyberpunk-city', 'snow-maple': 'snow-maple',
-    'star-gate': 'star-gate', 'desk-ui': 'desk-ui'
+    'star-gate': 'star-gate2', 'desk-ui': 'desk-ui'
   };
   var _pfDone = {}, _pfQueue = [], _pfCtrls = {}, _pfTimers = {}, _pfInflight = 0;
   function _pfEnqueue(file, front) {
@@ -4815,10 +4883,12 @@ var WP_IMG = {
   }
   function _pfResume() { setTimeout(_pfTick, 150); }
   document.addEventListener('visibilitychange', function () { if (!document.hidden) _pfResume(); });
-  // 进入页面：首屏稳定后把 16 张壁纸一口气全部预加载（jsDelivr 永久缓存，之后进页秒开）
+  // 进入页面：首屏稳定后把 16 张壁纸一口气全部预加载进 IndexedDB（第二次进站零网络、全部秒开）
   window.addEventListener('load', function () {
     setTimeout(function () {
-      WALLPAPERS.forEach(function (w) { var f = VIDEO_FILE[w.id]; if (f) _pfEnqueue(f, false); });
+      var keep = [];
+      WALLPAPERS.forEach(function (w) { var f = VIDEO_FILE[w.id]; if (f) { keep.push(f); _pfEnqueue(f, false); } });
+      _idbOpen(function (db) { if (db) _idbClean(db, keep); }); /* 清掉已不再使用的旧图 */
     }, 1200);
   });
 
@@ -4962,7 +5032,7 @@ var WP_IMG = {
       document.body.appendChild(box);
       canvas.style.opacity = '0';
       if (_wpCache[file]) { reveal(_wpCache[file]); return; }
-      wpTipShow();
+      setTimeout(function () { if (!_wpCache[file] && box) wpTipShow(); }, 90); /* 本地缓存命中时不闪提示 */
       ctrl = wpLoadImg(file, reveal, function () {
         // 全部图源失败：保底深色，收起提示
         if (box) box.style.opacity = '1';
@@ -5003,7 +5073,7 @@ var WP_IMG = {
     if (name === 'urban') return UrbanScene();
     if (name === 'cyberpunk-city') return ImageScene('wallpapers/cyberpunk-city.jpg');
     if (name === 'snow-maple') return ImageScene('wallpapers/snow-maple.jpg');
-    if (name === 'star-gate') return ImageScene('wallpapers/star-gate.jpg');
+    if (name === 'star-gate') return ImageScene('wallpapers/star-gate2.jpg');
     if (name === 'desk-ui') return ImageScene('wallpapers/desk-ui.jpg');
     return AuroraScene();
   }
