@@ -10,6 +10,8 @@
   <link rel="dns-prefetch" href="//cdn.cloudflare.steamstatic.com" />
   <link rel="dns-prefetch" href="//image.tmdb.org" />
   <link rel="dns-prefetch" href="//images.launchbox-app.com" />
+  <link rel="dns-prefetch" href="//cdn.jsdelivr.net" />
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23050508'/%3E%3Ctext x='32' y='42' font-family='monospace' font-size='26' font-weight='bold' fill='%23a06eff' text-anchor='middle'%3EZCY%3C/text%3E%3C/svg%3E" />
   <style>
 /* ==========================================================
@@ -4703,7 +4705,68 @@ var WP_IMG = {
       wpList.appendChild(item);
     });
   }
-  /* ---------- 视频壁纸预取：切壁纸尽量秒切 ---------- */
+  /* ---------- 壁纸图源：jsDelivr 国内节点优先（快 + 永久缓存），失败回退本站 ---------- */
+  var WP_COMMIT = 'd16ab5c43d828ab75e70d20ec375d61b261955ca';
+  var WP_CDN = 'https://cdn.jsdelivr.net/gh/liskcya/lite@' + WP_COMMIT + '/';
+  var _webpOK = (function () {
+    try {
+      var el = document.createElement('canvas');
+      return el.toDataURL('image/webp').indexOf('image/webp') === 5;
+    } catch (e) { return false; }
+  })();
+  var _wpCache = {};
+  function _wpCandidates(file) {
+    var list = [];
+    if (_webpOK) list.push(WP_CDN + 'wallpapers/' + file + '.webp');
+    list.push(WP_CDN + 'wallpapers/' + file + '.jpg');
+    if (_webpOK) list.push('wallpapers/' + file + '.webp');
+    list.push('wallpapers/' + file + '.jpg');
+    return list;
+  }
+  /* 按回退链加载单图；返回 {abort} 可真正中断在途下载 */
+  function wpLoadImg(file, onok, onfail) {
+    if (_wpCache[file]) { if (onok) onok(_wpCache[file]); return { abort: function () {} }; }
+    var urls = _wpCandidates(file), idx = 0, img = null, dead = false;
+    function next() {
+      if (dead) return;
+      if (idx >= urls.length) { if (onfail) onfail(); return; }
+      var u = urls[idx++];
+      img = new Image();
+      img.onload = function () { if (dead) return; _wpCache[file] = u; if (onok) onok(u); };
+      img.onerror = function () { setTimeout(next, 0); };
+      img.src = u;
+    }
+    next();
+    return {
+      abort: function () {
+        dead = true;
+        if (img) { img.onload = null; img.onerror = null; try { img.src = ''; } catch (e) {} img = null; }
+      }
+    };
+  }
+  /* “壁纸加载中…”提示（不阻挡任何点击） */
+  var wpTip = null;
+  (function () {
+    var st = document.createElement('style');
+    st.textContent =
+      '#wpLoadingTip{position:fixed;left:50%;bottom:112px;transform:translateX(-50%);z-index:60;display:none;align-items:center;gap:10px;padding:10px 18px;border-radius:999px;background:rgba(14,16,28,.62);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border:1px solid rgba(160,190,255,.28);color:#dfe6ff;font-size:13px;letter-spacing:1px;pointer-events:none;box-shadow:0 6px 24px rgba(0,0,0,.4);text-shadow:0 1px 4px rgba(0,0,0,.6)}' +
+      '#wpLoadingTip.show{display:flex}' +
+      '.wp-spin{width:18px;height:18px;border-radius:50%;border:2px solid rgba(255,255,255,.22);border-top-color:#9ec1ff;animation:wps .8s linear infinite}' +
+      '@keyframes wps{to{transform:rotate(360deg)}}';
+    document.head.appendChild(st);
+  })();
+  function wpTipShow() {
+    if (!wpTip) {
+      wpTip = document.createElement('div');
+      wpTip.id = 'wpLoadingTip';
+      wpTip.innerHTML = '<div class="wp-spin"></div><span>壁纸加载中…</span>';
+      document.body.appendChild(wpTip);
+    }
+    wpTip.classList.add('show');
+  }
+  function wpTipHide() { if (wpTip) wpTip.classList.remove('show'); }
+
+  /* ---------- 壁纸预取：切壁纸尽量秒切 ---------- */
   var VIDEO_FILE = {
     sakura: 'summer-studio', snow: 'snow', ocean: 'ocean', fireworks: 'fireworks',
     synthwave: 'synthwave', seaside: 'seaside', cyberpunk: 'cyberpunk', starry: 'starry',
@@ -4732,17 +4795,15 @@ var WP_IMG = {
     if (_pfBudget <= 0) { _pfQueue.length = 0; return; }
     var file = _pfQueue.shift();
     _pfBudget--;
-    var img = new Image();
-    var fin = function () { _pfEl = null; setTimeout(_pfTick, 50); };
-    img.onload = fin;
-    img.onerror = fin;
-    _pfTimer = setTimeout(fin, 10000);
-    _pfEl = img;
-    img.src = 'wallpapers/' + file + '.jpg';
+    var done = false;
+    var fin = function () { if (done) return; done = true; _pfEl = null; setTimeout(_pfTick, 50); };
+    _pfTimer = setTimeout(fin, 15000);
+    _pfEl = wpLoadImg(file, fin, fin);
   }
   function _pfAbort() {
     clearTimeout(_pfTimer);
     _pfQueue.length = 0;
+    if (_pfEl && _pfEl.abort) _pfEl.abort();
     _pfEl = null;
   }
   document.addEventListener('visibilitychange', function () { if (!document.hidden) setTimeout(_pfTick, 300); });
@@ -4879,22 +4940,41 @@ var WP_IMG = {
   }
 
   /* ---------- 场景调度 ---------- */
-  /* ---------- 场景：视频动态壁纸 ---------- */
+  /* ---------- 场景：静态壁纸（jsDelivr WebP 优先，带加载提示） ---------- */
   function ImageScene(src) {
-    var img = null;
+    var file = src.replace(/^wallpapers\//, '').replace(/\.jpg$/, '');
+    var box = null, ctrl = null, shown = false;
+    function reveal(url) {
+      if (!box) return;
+      box.style.backgroundImage = 'url("' + url + '")';
+      if (!shown) {
+        shown = true;
+        wpTipHide();
+        setTimeout(function () { if (box) box.style.opacity = '1'; }, 30);
+      }
+    }
     function init(w, h) {
+      if (box) return; // resize 不重建
       try { if (typeof _pfAbort === 'function') _pfAbort(); } catch (e) {}
-      img = document.createElement('div');
-      img.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;object-fit:cover;z-index:-4;pointer-events:none;opacity:0;transition:opacity 0.4s ease;background-image:url(' + src + ');background-size:cover;background-position:center;';
-      document.body.appendChild(img);
+      box = document.createElement('div');
+      box.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;z-index:-4;pointer-events:none;opacity:0;transition:opacity 0.4s ease;background-color:#0a0a14;background-size:cover;background-position:center;';
+      document.body.appendChild(box);
       canvas.style.opacity = '0';
-      setTimeout(function () { if (img) img.style.opacity = '1'; }, 50);
+      if (_wpCache[file]) { reveal(_wpCache[file]); return; }
+      wpTipShow();
+      ctrl = wpLoadImg(file, reveal, function () {
+        // 全部图源失败：保底深色，收起提示
+        if (box) box.style.opacity = '1';
+        wpTipHide();
+      });
     }
     function frame(c, w, h, t, dt) { /* static image, nothing to render */ }
     function destroy() {
-      if (img) {
-        var el = img;
-        img = null;
+      if (ctrl) { ctrl.abort(); ctrl = null; }
+      wpTipHide();
+      if (box) {
+        var el = box;
+        box = null;
         el.style.opacity = '0';
         setTimeout(function () { try { el.remove(); } catch (e) {} }, 400);
       }
