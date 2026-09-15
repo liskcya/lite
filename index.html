@@ -4671,8 +4671,8 @@ var WP_IMG = {
 
   var dock = document.createElement('div');
   dock.className = 'wp-dock';
-  dock.innerHTML = '<button class="wp-fab" id="wpFab" title="动态壁纸" aria-label="动态壁纸">🖼️</button>' +
-    '<div class="wp-panel"><div class="wp-panel-title">动态壁纸 · Wallpaper</div><div class="wp-list" id="wpList"></div></div>';
+  dock.innerHTML = '<button class="wp-fab" id="wpFab" title="静态壁纸" aria-label="静态壁纸">🖼️</button>' +
+    '<div class="wp-panel"><div class="wp-panel-title">静态壁纸 · Wallpaper</div><div class="wp-list" id="wpList"></div></div>';
   document.body.appendChild(dock);
   var wpFab = dock.querySelector('#wpFab');
   var wpList = dock.querySelector('#wpList');
@@ -4693,13 +4693,13 @@ var WP_IMG = {
       item.addEventListener('click', function () {
         mode = w.id;
         try { localStorage.setItem('zcy-wallpaper', mode); } catch (e) {}
-        if (VIDEO_FILE[w.id]) { _pfDone[VIDEO_FILE[w.id]] = true; _pfAbort(); }
+        if (VIDEO_FILE[w.id]) { _pfPause(); }
         renderList();
         applyScene(true);
       });
       if (VIDEO_FILE[w.id]) {
         item.addEventListener('mouseenter', function () {
-          if (_pfTier() > 0) { _pfBudget = Math.max(_pfBudget, 1); _pfEnqueue(VIDEO_FILE[w.id], true); }
+          _pfPrioritize(VIDEO_FILE[w.id]);
         });
       }
       wpList.appendChild(item);
@@ -4774,47 +4774,52 @@ var WP_IMG = {
     tokyorain: 'tokyorain', 'cyberpunk-city': 'cyberpunk-city', 'snow-maple': 'snow-maple',
     'star-gate': 'star-gate', 'desk-ui': 'desk-ui'
   };
-  var _pfDone = {}, _pfQueue = [], _pfEl = null, _pfBudget = 0, _pfTimer = 0;
-  var _conn = navigator.connection || null;
-  function _pfTier() {
-    if (!_conn) return 1;
-    if (_conn.saveData) return 0;
-    var et = _conn.effectiveType || '4g';
-    if (et === 'slow-2g' || et === '2g') return 0;
-    if (et === '3g') return 1;
-    return 2;
-  }
+  var _pfDone = {}, _pfQueue = [], _pfCtrls = {}, _pfTimers = {}, _pfInflight = 0;
   function _pfEnqueue(file, front) {
     if (!file || _pfDone[file]) return;
     _pfDone[file] = true;
     if (front) _pfQueue.unshift(file); else _pfQueue.push(file);
     _pfTick();
   }
+  function _pfPrioritize(file) {
+    if (!file) return;
+    var i = _pfQueue.indexOf(file);
+    if (i > 0) { _pfQueue.splice(i, 1); _pfQueue.unshift(file); }
+    else if (i < 0 && !_pfDone[file]) { _pfDone[file] = true; _pfQueue.unshift(file); }
+    _pfTick();
+  }
   function _pfTick() {
-    if (_pfEl || document.hidden || _pfQueue.length === 0) return;
-    if (_pfBudget <= 0) { _pfQueue.length = 0; return; }
-    var file = _pfQueue.shift();
-    _pfBudget--;
-    var done = false;
-    var fin = function () { if (done) return; done = true; _pfEl = null; setTimeout(_pfTick, 50); };
-    _pfTimer = setTimeout(fin, 15000);
-    _pfEl = wpLoadImg(file, fin, fin);
+    if (document.hidden) return;
+    while (_pfInflight < 3 && _pfQueue.length) {
+      var file = _pfQueue.shift();
+      (function (f) {
+        _pfInflight++;
+        var done = false;
+        var fin = function () {
+          if (done) return; done = true;
+          _pfInflight--; clearTimeout(_pfTimers[f]); delete _pfTimers[f]; delete _pfCtrls[f];
+          setTimeout(_pfTick, 30);
+        };
+        _pfTimers[f] = setTimeout(fin, 25000);
+        _pfCtrls[f] = wpLoadImg(f, fin, fin);
+      })(file);
+    }
   }
-  function _pfAbort() {
-    clearTimeout(_pfTimer);
-    _pfQueue.length = 0;
-    if (_pfEl && _pfEl.abort) _pfEl.abort();
-    _pfEl = null;
+  /* 用户点选壁纸时让路：暂停全部预取（队列保留），加载完自动续上 */
+  function _pfPause() {
+    var back = [];
+    for (var f in _pfCtrls) { back.push(f); _pfCtrls[f].abort(); }
+    for (var t in _pfTimers) { clearTimeout(_pfTimers[t]); }
+    _pfCtrls = {}; _pfTimers = {}; _pfInflight = 0;
+    back.reverse().forEach(function (f) { _pfQueue.unshift(f); });
   }
-  document.addEventListener('visibilitychange', function () { if (!document.hidden) setTimeout(_pfTick, 300); });
-  // 好网络下，页面空闲后悄悄预取前 4 个视频壁纸
+  function _pfResume() { setTimeout(_pfTick, 150); }
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) _pfResume(); });
+  // 进入页面：首屏稳定后把 16 张壁纸一口气全部预加载（jsDelivr 永久缓存，之后进页秒开）
   window.addEventListener('load', function () {
     setTimeout(function () {
-      if (_pfTier() < 2) return;
-      _pfBudget = Math.max(_pfBudget, 4);
-      var ids = WALLPAPERS.map(function (w) { return VIDEO_FILE[w.id]; }).filter(Boolean).slice(0, 4);
-      ids.forEach(function (f) { _pfEnqueue(f, false); });
-    }, 6000);
+      WALLPAPERS.forEach(function (w) { var f = VIDEO_FILE[w.id]; if (f) _pfEnqueue(f, false); });
+    }, 1200);
   });
 
   renderList();
@@ -4824,13 +4829,8 @@ var WP_IMG = {
     if (dock.classList.contains('open')) {
       var td = document.getElementById('themeDock');
       if (td) td.classList.remove('open');
-      // 打开面板：按网络档位预取若干视频，点开即播
-      var tier = _pfTier();
-      if (tier > 0) {
-        _pfBudget = Math.max(_pfBudget, tier === 2 ? 8 : 2);
-        var seq = WALLPAPERS.map(function (w) { return VIDEO_FILE[w.id]; }).filter(Boolean);
-        seq.slice(0, tier === 2 ? 10 : 3).forEach(function (f) { _pfEnqueue(f, false); });
-      }
+      // 打开面板：确保全量预加载在跑
+      _pfResume();
     }
   });
   document.addEventListener('click', function (e) {
@@ -4951,11 +4951,12 @@ var WP_IMG = {
         shown = true;
         wpTipHide();
         setTimeout(function () { if (box) box.style.opacity = '1'; }, 30);
+        try { if (typeof _pfResume === 'function') _pfResume(); } catch (e) {}
       }
     }
     function init(w, h) {
       if (box) return; // resize 不重建
-      try { if (typeof _pfAbort === 'function') _pfAbort(); } catch (e) {}
+      try { if (typeof _pfPause === 'function') _pfPause(); } catch (e) {}
       box = document.createElement('div');
       box.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;z-index:-4;pointer-events:none;opacity:0;transition:opacity 0.4s ease;background-color:#0a0a14;background-size:cover;background-position:center;';
       document.body.appendChild(box);
@@ -4966,6 +4967,7 @@ var WP_IMG = {
         // 全部图源失败：保底深色，收起提示
         if (box) box.style.opacity = '1';
         wpTipHide();
+        try { if (typeof _pfResume === 'function') _pfResume(); } catch (e) {}
       });
     }
     function frame(c, w, h, t, dt) { /* static image, nothing to render */ }
