@@ -4858,7 +4858,7 @@ var WP_IMG = {
   }
   function _pfTick() {
     if (document.hidden) return;
-    while (_pfInflight < 3 && _pfQueue.length) {
+    while (_pfInflight < 6 && _pfQueue.length) {
       var file = _pfQueue.shift();
       (function (f) {
         _pfInflight++;
@@ -4883,13 +4883,13 @@ var WP_IMG = {
   }
   function _pfResume() { setTimeout(_pfTick, 150); }
   document.addEventListener('visibilitychange', function () { if (!document.hidden) _pfResume(); });
-  // 进入页面：首屏稳定后把 16 张壁纸一口气全部预加载进 IndexedDB（第二次进站零网络、全部秒开）
+  // 进入页面：首屏资源加载完立即把 16 张壁纸全量预取进 IndexedDB（第二次进站零网络、全部秒开）
   window.addEventListener('load', function () {
     setTimeout(function () {
       var keep = [];
       WALLPAPERS.forEach(function (w) { var f = VIDEO_FILE[w.id]; if (f) { keep.push(f); _pfEnqueue(f, false); } });
       _idbOpen(function (db) { if (db) _idbClean(db, keep); }); /* 清掉已不再使用的旧图 */
-    }, 1200);
+    }, 200);
   });
 
   renderList();
