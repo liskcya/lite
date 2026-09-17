@@ -1933,13 +1933,23 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  /* ---------- 3. 个人荣誉渲染 ---------- */
+  /* ---------- 3. 个人荣誉渲染（WebP 优先 + CDN + decoding=async） ---------- */
   const grid = document.getElementById('honorsGrid');
   if (grid) {
+    const _hOn = typeof WP_HONORS_CDN !== 'undefined';
+    const honorSrc = (p) => _hOn ? WP_HONORS_CDN + p : p;
+    const honorPic = (p, alt, eager) => {
+      const webp = honorSrc(p.replace(/\.jpg$/, '.webp'));
+      const jpg = honorSrc(p);
+      return '<picture>' +
+        '<source type="image/webp" srcset="' + webp + '">' +
+        '<img src="' + jpg + '" alt="' + alt + '" decoding="async" loading="' + (eager ? 'eager' : 'lazy') + '" onerror="this.replaceWith(Object.assign(document.createElement(\'div\'),{className:\'honor-ph\',innerHTML:\'<b>\'+alt+\'</b>\'}))">' +
+        '</picture>';
+    };
     grid.innerHTML = HONORS.map((h, i) => `
       <article class="honor-card reveal" data-index="${i}" tabindex="0" role="button" aria-label="查看${h.title}证书大图">
         <div class="honor-img-wrap">
-          <img src="${encodeURI(h.img)}" alt="${h.title}荣誉证书" loading="lazy" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'honor-ph',innerHTML:'<b>${h.title}</b><span>${h.date} · ${h.issuer}</span><em>证书图片待补充</em>'}))" />
+          ${honorPic(h.img, h.title, false)}
           <span class="honor-zoom">🔍</span>
         </div>
         <div class="honor-info">
@@ -1967,15 +1977,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const openLb = (i) => {
       const h = HONORS[i];
-      lbImg.src = encodeURI(h.img);
+      const cd = _hOn ? WP_HONORS_CDN : '';
+      lbImg.src = cd + h.img.replace(/\.jpg$/, '.webp');
       lbImg.alt = h.title;
       lbImg.onerror = () => {
-        lbImg.style.display = 'none';
-        const ph = document.createElement('div');
-        ph.className = 'honor-ph';
-        ph.style.cssText = 'width:min(90vw,600px);aspect-ratio:4/3;max-height:85vh;border-radius:10px;';
-        ph.innerHTML = `<b>${h.title}</b><span>${h.date} · ${h.issuer}</span><em>证书图片待补充</em>`;
-        if (!lb.querySelector('.honor-ph')) lb.insertBefore(ph, lbCap);
+        lbImg.src = cd + h.img; /* webp 加载失败自动 fallback jpg */
+        lbImg.onerror = () => {
+          lbImg.style.display = 'none';
+          const ph = document.createElement('div');
+          ph.className = 'honor-ph';
+          ph.style.cssText = 'width:min(90vw,600px);aspect-ratio:4/3;max-height:85vh;border-radius:10px;';
+          ph.innerHTML = `<b>${h.title}</b><span>${h.date} · ${h.issuer}</span><em>证书图片待补充</em>`;
+          if (!lb.querySelector('.honor-ph')) lb.insertBefore(ph, lbCap);
+        };
       };
       lbImg.style.display = '';
       const oldPh = lb.querySelector('.honor-ph');
@@ -4707,7 +4721,9 @@ var WP_IMG = {
   }
   /* ---------- 壁纸图源：jsDelivr 国内节点优先（快 + 永久缓存），失败回退本站 ---------- */
   var WP_COMMIT = '1e2df8986f9a291feee1f9567ff31495a8b4809f';
+  var WP_HONORS_COMMIT = '6ee378f338ff0e2e786eb908054992a10673b705';
   var WP_CDN = 'https://cdn.jsdelivr.net/gh/liskcya/lite@' + WP_COMMIT + '/';
+  var WP_HONORS_CDN = 'https://cdn.jsdelivr.net/gh/liskcya/lite@' + WP_HONORS_COMMIT + '/';
   var _webpOK = (function () {
     try {
       var el = document.createElement('canvas');
