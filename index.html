@@ -4671,6 +4671,7 @@ var WP_IMG = {
     '.wp-dock.open .wp-panel{opacity:1;transform:translateY(0) scale(1);pointer-events:auto}' +
     '.wp-panel-title{font-family:var(--mono);font-size:11px;letter-spacing:0.14em;color:var(--text-faint);text-transform:uppercase;margin:2px 4px 12px}' +
     '.wp-list{display:flex;flex-direction:column;gap:6px;max-height:300px;overflow-y:auto}' +
+    '.wp-pf-status{margin-top:8px;padding-top:7px;border-top:1px solid rgba(255,255,255,.08);font-size:11px;line-height:1.4;color:rgba(235,235,245,.55)}' +
     '.wp-item{display:flex;align-items:center;gap:11px;width:100%;padding:8px 10px;border-radius:12px;background:transparent;border:1px solid transparent;cursor:pointer;text-align:left;transition:background .2s,border-color .2s}' +
     '.wp-item:hover{background:rgba(var(--acc-rgb),0.08)}' +
     '.wp-item.active{background:rgba(var(--acc-rgb),0.13);border-color:rgba(var(--acc-rgb),0.45)}' +
@@ -4686,7 +4687,7 @@ var WP_IMG = {
   var dock = document.createElement('div');
   dock.className = 'wp-dock';
   dock.innerHTML = '<button class="wp-fab" id="wpFab" title="静态壁纸" aria-label="静态壁纸">🖼️</button>' +
-    '<div class="wp-panel"><div class="wp-panel-title">静态壁纸 · Wallpaper</div><div class="wp-list" id="wpList"></div></div>';
+    '<div class="wp-panel"><div class="wp-panel-title">静态壁纸 · Wallpaper</div><div class="wp-list" id="wpList"></div><div class="wp-pf-status" id="wpPfStatus"></div></div>';
   document.body.appendChild(dock);
   var wpFab = dock.querySelector('#wpFab');
   var wpList = dock.querySelector('#wpList');
@@ -4858,7 +4859,22 @@ var WP_IMG = {
     tokyorain: 'tokyorain', 'cyberpunk-city': 'cyberpunk-city', 'snow-maple': 'snow-maple',
     'star-gate': 'star-gate2', 'desk-ui': 'desk-ui'
   };
-  var _pfDone = {}, _pfQueue = [], _pfCtrls = {}, _pfTimers = {}, _pfInflight = 0;
+  var _pfDone = {}, _pfOK = {}, _pfQueue = [], _pfCtrls = {}, _pfTimers = {}, _pfInflight = 0;
+  function _pfStatus() {
+    var el = document.getElementById('wpPfStatus');
+    if (!el) return;
+    var total = 0;
+    WALLPAPERS.forEach(function (w) { if (VIDEO_FILE[w.id]) total++; });
+    var ok = 0;
+    for (var k in _pfOK) ok++;
+    if (ok >= total && total > 0) {
+      el.textContent = '✓ ' + total + ' 张壁纸已全部缓存，下次进站秒开';
+    } else if (_pfInflight > 0 || _pfQueue.length) {
+      el.textContent = '正在缓存 ' + ok + '/' + total + ' …（可关闭面板，后台继续）';
+    } else {
+      el.textContent = ok + '/' + total + ' 已缓存';
+    }
+  }
   function _pfEnqueue(file, front) {
     if (!file || _pfDone[file]) return;
     _pfDone[file] = true;
@@ -4885,7 +4901,7 @@ var WP_IMG = {
           setTimeout(_pfTick, 30);
         };
         _pfTimers[f] = setTimeout(fin, 25000);
-        _pfCtrls[f] = wpLoadImg(f, fin, fin);
+        _pfCtrls[f] = wpLoadImg(f, function () { _pfOK[f] = 1; _pfStatus(); fin(); }, function () { _pfStatus(); fin(); });
       })(file);
     }
   }
@@ -4917,6 +4933,7 @@ var WP_IMG = {
       if (td) td.classList.remove('open');
       // 打开面板：确保全量预加载在跑
       _pfResume();
+      _pfStatus();
     }
   });
   document.addEventListener('click', function (e) {
